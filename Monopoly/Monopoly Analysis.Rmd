@@ -1,0 +1,116 @@
+---
+title: "Monopoly Analysis"
+output: html_notebook
+---
+
+# THIS PROJECT IS UNFINISHED AND IS NOT AN ACCURATE REPRESENTATION OF THE LEVEL OF WORK THAT I PRODUCE
+
+```{r}
+library(ggplot2)
+```
+
+```{r}
+player <- read.csv('sim.player.up.csv', header = TRUE, stringsAsFactors = FALSE)[, 2:12]
+property <- read.csv('sim.property.up.csv', header = TRUE, stringsAsFactors = FALSE)[, 2:6]
+
+names(property) <- c("ident", "freq", "winning", "money.made", "group")
+```
+
+Which property is landed on the most?
+```{r}
+avg.landed <- aggregate(freq ~ ident, data = property, mean)
+avg.landed <- avg.landed[order(avg.landed$freq, decreasing = TRUE), ]
+head(avg.landed)
+```
+
+Is one property landed on significantly more than another?
+```{r}
+lm.prop.freq <- lm(freq ~ ident, data = property)
+anova(lm.prop.freq)
+```
+
+Which group is landed on the most?
+```{r}
+group.freq <- aggregate(freq ~ group, property, mean)
+group.freq[order(group.freq$freq, decreasing = TRUE), ]
+```
+
+Is one group landed on significantly more than another?
+```{r}
+lm.freq <- lm(freq ~ group, data = property)
+anova(lm.freq)
+```
+
+Which property makes the most money?
+```{r}
+avg.money <- aggregate(money.made ~ ident, data = property, mean)
+avg.money <- avg.money[order(avg.money$money.made, decreasing = TRUE), ]
+head(avg.money)
+```
+
+Does one property make signficantly more money than another?
+```{r}
+prop.profit.lm <- lm(money.made ~ ident, data = property)
+anova(prop.profit.lm)
+```
+
+Which group is the most profitable?
+```{r}
+group.money <- aggregate(money.made ~ group, data = property, mean)
+group.money <- group.money[order(group.money$money.made, decreasing = TRUE), ]
+head(group.money)
+```
+
+Is one group part of the winning players ownership more than another?
+```{r}
+lm.group <- lm(winning ~ group, data = property)
+anova(lm.group)
+```
+
+Data Manipulation
+```{r}
+player$winner <- player$bankrupt.players == 0
+winners <- player[which(player$winner == TRUE), ]
+losers <- player[which(player$winner != TRUE), ]
+```
+
+What is the best player comfort level?
+```{r}
+ggplot(data = winners, mapping = aes(x = player.comfort)) +
+  geom_histogram(binwidth = 0.05) +
+  xlab("Comfort Level") +
+  ylab("Count") +
+  ggtitle("Player Comfort Histogram")
+```
+
+Does player order matter?
+```{r}
+table(winners$players)
+
+table(winners$players) / length(winners$players)
+```
+
+Do winners own boardwalk or parkplace more often than the losers?
+```{r}
+mean(winners$owned.blue)
+
+mean(losers$owned.blue)
+```
+
+Were winners in jail less?
+```{r}
+mean(winners$times.in.jail)
+
+mean(losers$times.in.jail)
+```
+
+Average cash on hand at the end of the game?
+```{r}
+mean(winners$player.cash)
+```
+
+Average Number of Turns per game of the winner?
+```{r}
+mean(winners$turn)
+```
+
