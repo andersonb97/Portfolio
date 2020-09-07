@@ -26,7 +26,8 @@ Assumptions made during simulation:
 library(plyr)
 library(dplyr)
 library(tictoc)
-set.seed(6252020)
+library(future.apply)
+plan(multisession, workers = 7)
 ```
 
 ## Player Setup
@@ -105,6 +106,13 @@ setup <- function(){
   color.sets <<- rep(0,6)
   props.at.five <<- rep(0,6)
   doubles <<- vector("list", 6)
+  
+#COMMUNITY CHEST SETUP
+  chest.cards <<- c(1:17)
+  get.out <<- c(0, 0)
+  
+#CHANCE SETUP
+  chance.cards <<- c(1:16)
 }
 ```
 
@@ -129,7 +137,7 @@ roll <- function(i){
 
 #The jail function runs a player through what happens when a player is in jail. A player is sent to jail when they roll doubles three times or lands on space 30. They are immediately sent to space 100 (a holder space to differentiate between when you are in jail and 'just visting'). A player will get out of jail on the first turn there if they can afford it, if they cannot then they will stay there until they roll doubles. 
 jail <- function(i){
-  if (tail(doubles[[i]], 1) == 1) {
+  if (tail(doubles[[i]], 1) == 1 || i %in% get.out) {
     
     pos[i] <<- 10
     
@@ -144,7 +152,7 @@ jail <- function(i){
     rent()
     
   } else if (50 / player.cash[i] < player.comfort 
-             || sum(spots[[i]][(length(spots[[i]]) - 2) : (length(spots[[i]]))] == 100) == 3) {
+             || sum(spots[[i]][(max(length(spots[[i]]) - 2, 0)) : (length(spots[[i]]))] == 100) == 3) {
     
     player.cash[i] <<- player.cash[i] - 50
     
@@ -185,36 +193,40 @@ space.action <- function(i){
   }
   
   if(sum(tail(doubles[[i]], 3) != 3)){
-  
-  if (pos[i] %in% properties$ident) {
-    a <<- which(properties$ident == pos[i])
-    if (properties$status[a] >= 1) {
-      player.cash[i] <<- player.cash[i] - properties$running.rent[a]
-      bankrupt(i) 
-      renter <<- properties$owned.by[a]
-      
-      if (player.cash[i] < 0){
-        player.cash[renter] <<- player.cash[renter] + (properties$running.rent[a] + player.cash[i])
-      } else {
-        player.cash[renter] <<- player.cash[renter] + properties$running.rent[a]
+    
+    if (pos[i] %in% properties$ident) {
+      a <<- which(properties$ident == pos[i])
+      if (properties$status[a] >= 1) {
+        player.cash[i] <<- player.cash[i] - properties$running.rent[a]
+        bankrupt(i) 
+        renter <<- properties$owned.by[a]
+        
+        if (player.cash[i] < 0){
+          player.cash[renter] <<- player.cash[renter] + (properties$running.rent[a] + player.cash[i])
+        } else {
+          player.cash[renter] <<- player.cash[renter] + properties$running.rent[a]
+        }
+        
+        properties$money.made[a] <<- properties$money.made[a] + properties$running.rent[a]
+        
+      } else if (properties$status[a] == 0) {
+        if ((properties$price[a] / player.cash[i]) < player.comfort[i]) {
+          player.cash[i] <<- player.cash[i] - properties$price[a]
+          properties$status[a] <<- 1
+          properties$owned.by[a] <<- i
+        }  
       }
-      
-      properties$money.made[a] <<- properties$money.made[a] + properties$running.rent[a]
-      
-    } else if (properties$status[a] == 0) {
-      if ((properties$price[a] / player.cash[i]) < player.comfort[i]) {
-        player.cash[i] <<- player.cash[i] - properties$price[a]
-        properties$status[a] <<- 1
-        properties$owned.by[a] <<- i
-      }  
+    } else if (pos[i] %in% other_spots$Oident) {
+      b <<- which(other_spots$Oident == pos[i])
+      player.cash[i] <<- player.cash[i] - other_spots$Ocost[b]
+      bankrupt(i)
+    } else if (pos[i] == 30) {
+      pos[i] <<- 100
+    } else if (pos[i] %in% c(2, 17, 33)){
+      community.chest(i)
+    } else if (pos[i] %in% c(7, 22, 36)){
+      chance(i)
     }
-  } else if (pos[i] %in% other_spots$Oident) {
-    b <<- which(other_spots$Oident == pos[i])
-    player.cash[i] <<- player.cash[i] - other_spots$Ocost[b]
-    bankrupt(i)
-  } else if (pos[i] == 30) {
-    pos[i] <<- 100
-  } 
   } else {
     pos[i] <<- 100
   }
@@ -315,6 +327,9 @@ rent <- function(){
 
 #Buy.houses funciton is the process through which players buy houeses. This can be done at any point regardless of who's turn it is. Playes will buy houses on full color sets if they can afford it and given their comfort level. Players must build evenly, this is an added challenge because it means that you cannot build a property all the way up to a hotel if the property next to it doesn't even have a hosue. This fucntion assigns a status of 2 to all full color sets and increases the status to 3, 4, etc. when a houses is added. 
 buy.houses <- function(){
+  
+  count.buildings()
+  
   for (c in 1:8) {
     prop.grab <- which(properties$group == c)
     
@@ -331,11 +346,15 @@ buy.houses <- function(){
       p <- properties$owned.by[change]
       
       if (between(upgrade$status, 2, 6) && (player.cash[p] * player.comfort[p]) > properties$house.price[change]) {
-        properties$status[change] <<-  properties$status[change] + 1
-        player.cash[p] <<- player.cash[p] - properties$house.price[change]
+        if(properties$status[change] == 6 && hotel.count < 12){
+          properties$status[change] <<-  properties$status[change] + 1
+          player.cash[p] <<- player.cash[p] - properties$house.price[change]
+        } else if(properties$status[change] < 6 && house.count < 32){
+          properties$status[change] <<-  properties$status[change] + 1
+          player.cash[p] <<- player.cash[p] - properties$house.price[change]
+        }
       }
-    }
-    
+  }
 }
 
 #The rr.ut.status function stands for railroad and utilities. Status for railroads and utilities do not work like status for properties on which houses can be built. These properties move up in status based on how many of them you own. For example when you own two railroads your status the status of those railroads goes up to 2 eventhough you don't own all of the railroads. This increases the rent. This assigns statuses to each property based on how many different players own them.
@@ -509,6 +528,228 @@ variable.costs <- function(i) {
   }
   
 }
+
+#This is the community chest function. It randomly selects from the cards available that have not been selected before then it goes through all of the different possible cards with their assigned penalties. Some just affect the player. Some affect all the players. The most tricky one to code penalized players for all of their houses and hotes.
+community.chest <- function(i){
+  
+  if(length(chest.cards) == 0){
+    chest.cards <<- c(1:17)
+  }
+  
+  draw <- sample(chest.cards, 1)
+  chest.cards <<- chest.cards[-draw]
+  
+  if(draw == 1){
+    pos[i] <<- 40
+  } else if (draw == 2){
+    player.cash[i] <<- player.cash[i] + 200
+  } else if (draw == 3){
+    player.cash[i] <<- player.cash[i] + 50
+  } else if (draw == 4){
+    player.cash <<- player.cash - 50
+    player.cash[i] <<- player.cash[i] + 100
+    bankrupt(i)
+  } else if (draw %in% c(5, 6, 7)){
+    player.cash[i] <<- player.cash[i] + 100
+  } else if (draw == 8){
+    player.cash[i] <<- player.cash[i] + 20
+  } else if (draw == 9){
+    player.cash <<- player.cash - 10
+    player.cash[i] <<- player.cash[i] + 20
+    bankrupt(i)
+  } else if (draw == 10){
+    player.cash[i] <<- player.cash[i] + 25
+  } else if (draw == 11){
+    player.cash[i] <<- player.cash[i] + 10
+  } else if (draw %in% c(12, 13, 14)){
+    player.cash[i] <<- player.cash[i] - 50 
+    bankrupt(i)
+  } else if (draw == 15){
+    hos.and.hot <- properties$status[which(properties$owned.by == i)]
+    
+    if(length(hos.and.hot) > 0){
+      
+      hotels <- sum(hos.and.hot == 7)
+      houses <- sum(hos.and.hot[which(between(hos.and.hot, 3, 6))] - 2)
+      
+      payment <- hotels * 115 + houses * 40
+      
+      player.cash[i] <<- player.cash[i] - payment
+      
+      bankrupt(i)
+    }
+  } else if (draw == 16){
+    pos[i] <<- 100
+  } else if (draw == 17){
+    get.out[1] <<- i
+  }
+
+}
+
+# This function is for a piece of code that is run repeatedly in the chance function. It advances players to the next railroad and lets them buy it if it is unowned or charges them twice the normal rent if it is owned.
+rr.chance <- function(x, ij = i){
+  pos[ij] <<- x
+  rr <- which(properties$ident == x)
+  if(properties$status[rr] > 0 ){
+    cost <- 2 * (properties$running.rent[rr])
+    player.cash[ij] <<- player.cash[ij] - cost
+    player.cash[properties$owned.by[rr]] <<- player.cash[properties$owned.by[rr]] + cost
+    bankrupt(ij)
+  } else {
+    if ((properties$price[rr] / player.cash[ij]) < player.comfort[ij]) {
+      player.cash[ij] <<- player.cash[ij] - properties$price[rr]
+      properties$status[rr] <<- 1
+      properties$owned.by[rr] <<- ij
+      bankrupt(ij)
+    }  
+  }
+}
+
+# This function is for a piece of code that is run repeatedly in the chance function. It advances players to the next utility and lets them buy it if it is unowned or ten times the roll of the die if it is owned.
+util.chance <- function(x, ij = i){
+  pos[ij] <<- x
+  ut <- which(properties$ident == x)
+  if(properties$status[ut] > 0 ){
+    cost <- 10 * (sample(1:6, 1) + sample(1:6, 1))
+    player.cash[ij] <<- player.cash[ij] - cost
+    player.cash[properties$owned.by[ut]] <<- player.cash[properties$owned.by[ut]] + cost
+    bankrupt(ij)
+  } else {
+    if ((properties$price[ut] / player.cash[ij]) < player.comfort[ij]) {
+      player.cash[ij] <<- player.cash[ij] - properties$price[ut]
+      properties$status[ut] <<- 1
+      properties$owned.by[ut] <<- ij
+      bankrupt(ij)
+    }  
+  }
+}
+
+# The chance function is very similar to the community chest function. It simulates a draw from the chance stack and runs through the different chance cards.
+chance <- function(i){
+  
+  if(length(chance.cards) == 0){
+    chance.cards <<- c(1:16)
+  }
+  
+  draw <<- sample(chance.cards, 1)
+  chance.cards <<- chance.cards[-draw]
+  
+  if(draw == 1){
+    pos[i] <<- 40
+  } else if (draw == 2){
+    if(pos[i] > 24){
+      spaces <<- 24 + (40 - pos[i])
+      space.action(i)
+    } else {
+      spaces <<- 24 - pos[i]
+      space.action(i)
+    }
+  } else if (draw == 3){
+    if(pos[i] > 11){
+      spaces <<- 11 + (40 - pos[i])
+      space.action(i)
+    } else {
+      spaces <<- 11 - pos[i]
+      space.action(i)
+    }
+  } else if (draw == 4){
+    if(between(pos[i], 13, 27)){
+      util.chance(x = 28)
+    } else {
+      util.chance(x = 12)
+    }
+  } else if (draw == 5){
+    if (between(pos[i], 5, 14)){
+      rr.chance(x = 15) 
+    } else if(between(pos[i], 15, 24)){
+      rr.chance(x = 25)
+    } else if(between(pos[i], 25, 34)){
+      rr.chance(x = 35)
+    } else {
+      rr.chance(x = 5) 
+    }
+  } else if (draw == 6){
+    spaces <<- -3
+    space.action(i)
+  } else if (draw == 7){
+    player.cash[i] <<- player.cash[i] + 50
+  } else if (draw == 8){
+    get.out[2] <<- i
+  } else if (draw == 9){
+    pos[i] <<- 100
+  } else if (draw == 10){
+    hos.and.hot <- properties$status[which(properties$owned.by == i)]
+    
+    if(length(hos.and.hot) > 0){
+      
+      hotels <- sum(hos.and.hot == 7)
+      houses <- sum(hos.and.hot[which(between(hos.and.hot, 3, 6))] - 2)
+      
+      payment <- hotels * 100 + houses * 25
+      
+      player.cash[i] <<- player.cash[i] - payment
+      
+      bankrupt(i)
+    }
+  } else if (draw == 11){
+    player.cash[i] <<- player.cash[i] - 15
+  } else if (draw == 12){
+    if(pos[i] > 5){
+      spaces <<- 40 - pos[i] + 5
+      space.action(i)
+    } else {
+      spaces <<- 5 - pos[i]
+      space.action(i)
+    }
+  } else if (draw == 13){
+    spaces <<- 39 - pos[i]
+    space.action(i)
+  } else if (draw == 14){
+    player.cash <<- player.cash + 50
+    player.cash[i] <<- player.cash[i] - (50 * length(players))
+    bankrupt(i)
+  } else if (draw == 15){
+    player.cash[i] <<- player.cash[i] + 150
+  } else if (draw == 16){
+    player.cash[i] <<- player.cash[i] + 100
+  }
+}
+
+# This count buildings function is used to make sure that there are not more
+# hotels and houses sold than the game will allow for. This function counts
+# the number of houses and hotels in play so that a constraint can be set.
+count.buildings <- function(){
+  hotel.count <<- length(which(properties$status > 6))
+  house.count <<- sum(properties$status[which(between(properties$status, 3, 6))])
+}
+
+# The Stale function is implemented because of the simple strategy of the 
+# players it is possible for the players to reach a stale mate.The solution
+# that I have come up with that is within the scope of the project is to
+# set a cap on the number of turns a game can go to (500) and then to 
+# calculate the net worth of the players and assigns the winners and 
+# runners up from there.
+stale <- function(){
+  if(sum(bankrupt.players > 0) < length(players) - 1){
+    rem.players <- which(bankrupt.players == 0)
+    
+    net.worth <<- c()
+    for(j in rem.players){
+      net.worth <<- c(net.worth, sum(prop.value[which(properties$owned.by == j)], player.cash[j]))
+    }
+    
+    tie.breaker <- data.frame(cbind(rem.players, net.worth))
+    tie.breaker <- tie.breaker[order(-net.worth), ]
+    tie.breaker <- cbind(tie.breaker, "ident" = c(1:nrow(tie.breaker)) - 1)
+    tie.breaker <- tie.breaker[-1, ]
+    tie.breaker$ident <- 6 - tie.breaker$ident
+    
+    for(j in 1:nrow(tie.breaker)){
+      bankrupt.players[tie.breaker$rem.players[j]] <<- tie.breaker$ident[j]
+    }
+    stale.mate <<- rep(1, 6)
+  }
+}
 ```
 
 ## Game Simulation
@@ -524,12 +765,12 @@ monopoly <- function() {
   
   setup()
   
-  while(sum(bankrupt.players > 0) < 5) {
+  while(sum(bankrupt.players > 0) < 5 && sum(turn > 500) == 0) {
     
     rent()
     
     for (i in players) {
-      
+      i <<- i
       if (bankrupt.players[i] == 0) {
         
         roll(i)
@@ -589,6 +830,10 @@ monopoly <- function() {
     }
   }
   
+  stale.mate <<- rep(0, 6)
+    
+  stale()
+  
   for (i in players) {
     times.in.jail[i] <- sum(spots[[i]] == 100)
   }
@@ -615,7 +860,7 @@ monopoly <- function() {
   prop.df <<- cbind(times.landed.on, winning.prop, prop.order$money.made, prop.order$group)
   
   results.df <<- data.frame(players, player.cash, player.comfort, bankrupt.players, turn, 
-                           total.value.fifteen, owned.blue, times.in.jail, properties.sold, color.sets, props.at.five)
+                           total.value.fifteen, owned.blue, times.in.jail, properties.sold, color.sets, props.at.five, stale.mate)
   
   return(list(prop.df, results.df))
 }
@@ -630,24 +875,24 @@ This is the simulation of one game in monopoly. It will return two dataframes wi
 
 ## Monte Carlo Simulation
 
-This code runs a Monte Carlo simulation study and compiles all results into two dataframes and writes them as '.csv' documents. It is commented out so that you can run the full R-Markdown file without the 3 hour long simulation.
+This code runs a Monte Carlo simulation study and compiles all results into two dataframes and writes them as '.csv' documents. It is commented out so that you can run the full R-Markdown file without the 1.5 hour long simulation.
 ```{r}
-# tic()
-# n.reps <- 3000
-# monte.carlo <- replicate(n.reps, monopoly())
-# 
-# prop.results.df <- data.frame()
-# player.results.df <- data.frame()
-# 
-# for (n in 1:n.reps) {
-#   prop.results.df <- rbind(prop.results.df, monte.carlo[[1, n]])
-# }
-# 
-# for (n in 1:n.reps){
-#   player.results.df <- rbind(player.results.df, monte.carlo[[2, n]])
-# }
-# toc()
-# 
-# write.csv(player.results.df, "sim.player.csv")
-# write.csv(prop.results.df, "sim.property.csv")
+tic()
+n.reps <- 3000
+monte.carlo <- future_replicate(n.reps, monopoly())
+
+prop.results.df <- data.frame()
+player.results.df <- data.frame()
+
+for (n in 1:n.reps) {
+  prop.results.df <- rbind(prop.results.df, monte.carlo[[1, n]])
+}
+
+for (n in 1:n.reps){
+  player.results.df <- rbind(player.results.df, monte.carlo[[2, n]])
+}
+toc()
+
+write.csv(player.results.df, "sim.player.csv")
+write.csv(prop.results.df, "sim.property.csv")
 ```
