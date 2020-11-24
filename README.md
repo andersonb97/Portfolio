@@ -18,3 +18,11 @@ based off a player comfort level randomly assigned to each player at the beginni
 The Monopoly Analysis file contains various insites into the game of monopoly including which
 player is the most likely to win depending on what order they begin the game play in, what 
 player comfort level is most appropriate, which properties are the most profitable, etc.
+
+Sales Forecast Time Series -- This is a Kaggle competition that I did for a class. It is a
+fairly straight forward time series problem that includes three months predictions in the 
+future for different items in 10 different stores. The Kaggle competition scores the predictions
+on a SMAPE scale. The code that I have here recieved a SMAPe score of 14.3 which is very 
+competative in the competition. To perform the analysis, I used a gradient boosted model in the
+'Caret' package in R and it includes brief data cleaning, data exploration, and factor 
+engineering.
