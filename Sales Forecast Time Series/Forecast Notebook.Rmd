@@ -36,9 +36,7 @@ store.train <- read_csv('train.csv')
 store.test <- read_csv('test.csv')
 
 store <- bind_rows(store.train, 
-                   store.test, 
-                   .id = 'me') %>% 
-  select(-me)
+                   store.test)
 ```
 
 ### Pull out weekdays, months and year
